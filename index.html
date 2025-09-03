@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="sv">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kundtjänst – AI-agent</title>
+
+<style>
+  :root{--bg:#0b0d10;--card:#111317;--stroke:#22252b;--muted:#9ca3af;--text:#e5e7eb}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:ui-sans-serif,system-ui;background:var(--bg);color:var(--text)}
+  .wrap{max-width:880px;margin:0 auto;padding:24px}
+  h1{font-size:20px;margin:0 0 12px}
+  .card{border:1px solid var(--stroke);background:var(--card);border-radius:14px;padding:16px;height:74vh;display:flex;flex-direction:column}
+  .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+  .toolbar .badge{font-size:12px;color:var(--muted);border:1px solid var(--stroke);padding:4px 8px;border-radius:999px}
+  .messages{flex:1;overflow:auto;padding-right:6px}
+  .bubble{padding:10px 12px;border-radius:12px;margin:8px 0;white-space:pre-wrap;max-width:80%}
+  .me{background:#1f2937;margin-left:auto}
+  .ai{background:#0f172a;margin-right:auto}
+  .row{display:flex;gap:8px;margin-top:10px}
+  textarea,button{border-radius:12px;border:1px solid var(--stroke);background:var(--bg);color:var(--text)}
+  textarea{flex:1;min-height:48px;max-height:140px;padding:12px;resize:vertical}
+  button{padding:0 16px;height:48px;cursor:pointer}
+  .muted{color:var(--muted);font-size:12px;margin-top:6px}
+</style>
+
+<div class="wrap">
+  <h1>AI-agent för Kundtjänst</h1>
+  <div class="card" id="app">
+    <div class="toolbar">
+      <span class="badge" id="modeBadge">Läge: Demo (offline)</span>
+      <button id="clearBtn" title="Rensa historik">Rensa</button>
+      <button id="copyBtn" title="Kopiera senaste svar">Kopiera svar</button>
+    </div>
+    <div id="messages" class="messages" aria-live="polite"></div>
+    <div class="row">
+      <textarea id="q" placeholder="Skriv din fråga… (t.ex. Har ni HTM2514?)" autocomplete="off"></textarea>
+      <button id="send">Skicka</button>
+    </div>
+    <div class="muted">Enter = skicka • Shift+Enter = ny rad</div>
+  </div>
+</div>
+
+<script>
+/** ============ INSTRUKTION ============
+ * 1) Nu kör vi DEMO-läge (ingen serverkontakt).
+ * 2) När widgeten är på plats byter du MODE till 'webhook'
+ *    och sätter WEBHOOK_URL – det tar vi i nästa steg.
+ */
+const MODE = 'demo'; // 'demo' eller 'webhook'
+const WEBHOOK_URL = 'https://example.com/webhook/ask'; // fyll i senare
+
+const msgs = document.getElementById('messages');
+const q = document.getElementById('q');
+const sendBtn = document.getElementById('send');
+const copyBtn = document.getElementById('copyBtn');
+const clearBtn = document.getElementById('clearBtn');
+document.getElementById('modeBadge').textContent = `Läge: ${MODE === 'demo' ? 'Demo (offline)' : 'Webhook'}`;
+
+let history = []; // enkel historik i minnet
+
+function addBubble(text, who){
+  const div = document.createElement('div');
+  div.className = 'bubble ' + (who === 'me' ? 'me' : 'ai');
+  div.textContent = text;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  return div;
+}
+
+function extractArticleNumber(s){
+  // enkel matchare: 5+ tecken A–Z/0–9 (du kan byta mot ert SKU-mönster)
+  const m = (s || '').match(/\b[A-Z0-9]{5,}\b/i);
+  return m ? m[0].toUpperCase() : '';
+}
+
+// DEMO-svar (ingen server). Byt till webhook i nästa steg.
+function demoAnswer(question){
+  const sku = extractArticleNumber(question);
+  const tips = [
+    'Jag förstår. Jag letar upp liknande ärenden i kunskapsbasen.',
+    sku ? `Jag tolkar artikelnumret som ${sku}.` : 'Jag hittade inget artikelnummer i frågan.',
+    'Vill du att jag ska föreslå ett svar till kunden?'
+  ].join('\n');
+  return `Tack för din fråga:\n“${question}”\n\n${tips}`;
+}
+
+async function ask(){
+  const question = q.value.trim();
+  if(!question) return;
+  addBubble(question, 'me');
+  history.push({role:'user', content:question});
+  q.value = ''; q.focus();
+
+  const thinking = addBubble('… tänker …', 'ai');
+  try{
+    let answer;
+    if(MODE === 'demo'){
+      await new Promise(r=>setTimeout(r, 400)); // liten delay för känsla
+      answer = demoAnswer(question);
+    } else {
+      // Webhook-läge (används i nästa steg när vi kopplar n8n)
+      const res = await fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          question,
+          articleNumber: extractArticleNumber(question),
+          // skicka gärna med kontext senare: history.slice(-6)
+        })
+      });
+      const data = await res.json().catch(()=> ({}));
+      answer = data.answer || 'Inget svar från agenten.';
+    }
+    thinking.remove();
+    addBubble(answer, 'ai');
+    history.push({role:'assistant', content:answer});
+  }catch(err){
+    thinking.remove();
+    addBubble('Fel: kunde inte hämta svar.', 'ai');
+    console.error(err);
+  }
+}
+
+sendBtn.onclick = ask;
+q.addEventListener('keydown', (e)=>{
+  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); ask(); }
+});
+
+copyBtn.onclick = ()=>{
+  const last = [...msgs.querySelectorAll('.ai')].pop();
+  if(!last){ return; }
+  navigator.clipboard.writeText(last.textContent || '').then(()=> {
+    copyBtn.textContent = 'Kopierat ✓';
+    setTimeout(()=> copyBtn.textContent = 'Kopiera svar', 1000);
+  });
+};
+
+clearBtn.onclick = ()=>{
+  msgs.innerHTML = '';
+  history = [];
+};
+</script>
+</html>
